@@ -1,93 +1,121 @@
-const express = require("express")
-const fs = require("fs")
+const express = require("express");
+const MongoClient = require("mongodb").MongoClient;
+const objectId = require("mongodb").ObjectId;
 
-const app = express()
-const jsonParser = express.json()
+const app = express();
+const jsonParser = express.json();
+const mongoClient = new MongoClient("mongodb://127.0.0.1:27017/");
 
-app.use(express.static(__dirname + "/public"))
+app.use(express.static(`${__dirname}/public`));
+    (async () => {
+        try {
+            await mongoClient.connect()
+            app.locals.collection = mongoClient.db("usersdb").collection("users")
+            app.listen(3000)
+            console.log("Server waiting for connection...")
+        } catch (err) {
+            if (err instanceof Error) {
+                return console.error(err.message)
+            }
 
-const filePath = "users.json"
+        }
+    })()
 
-app.get("/api/users", (__, res) => {
-    const content = fs.readFileSync(filePath, "utf8")
-    const users = JSON.parse(content)
-    res.send(users)
+app.get("/api/users", async (req, res) => {
+    const collection = req.app.locals.collection
+    try {
+        const users = await collection.find({}).toArray()
+        res.send(users)
+
+    } catch (err) {
+        if (err instanceof Error) {
+            console.error(err.message)
+            res.sendStatus(500)
+        }
+    }
 })
 
-app.get("/api/users/:id", (req, res) => {
-    const id = req.params.id
-    const content = fs.readFileSync(filePath, "utf8")
-    const users = JSON.parse(content)
-
-    let user = users.find(el => el.id.toString() === id) || null
-
-    if (user) {
-        res.send(user)
+app.get("/api/users/:id", async (req, res) => {
+    const collection = req.app.locals.collection
+    try {
+        const id = new objectId(req.params.id)
+        const user = await collection.findOne({ _id: id })
+        if (user) res.send(user)
+        else res.sendStatus(404)
+    } catch (err) {
+        if (err instanceof Error) {
+            console.error(err.message)
+            res.sendStatus(500)
+        }
     }
+})
 
-    res.status(404).send()
-}
-)
-
-app.post("/api/users", jsonParser, (req, res) => {
+app.post("/api/users", jsonParser, async (req, res) => {
     if (!req.body) return res.sendStatus(400)
 
     const userName = req.body.name
     const userAge = req.body.age
-
     const user = { name: userName, age: userAge }
 
-    let data = fs.readFileSync(filePath, "utf8")
-    const users = JSON.parse(data)
-
-    const id = Math.max.apply(Math, users.map((el) => el.id))
-    user.id = id + 1
-
-    users.push(user)
-    data = JSON.stringify(users)
-
-    fs.writeFileSync("users.json", data)
-    res.send(user)
-})
-
-app.delete("/api/users/:id", (req, res) => {
-    const id = req.params.id
-    let data = fs.readFileSync(filePath, "utf8")
-    const users = JSON.parse(data)
-
-    const index = users.findIndex(user => user.id.toString() === id);
-
-    if (index > -1) {
-        const user = users.splice(index, 1)[0]
-        data = JSON.stringify(users)
-        fs.writeFileSync("users.json", data)
+    const collection = req.app.locals.collection
+    try {
+        await collection.insertOne(user)
         res.send(user)
-    }
 
-    res.status(404).send()
+    } catch (err) {
+        if (err instanceof Error) {
+            console.error(err.message)
+            res.sendStatus(500)
+        }
+    }
 })
 
-app.put("/api/users", jsonParser, (req, res) => {
-    if (!req.body) return res.sendStatus(400)
+app.delete("/api/users/:id", async (req, res) => {
+    const collection = req.app.locals.collection
+    try {
+        const id = new objectId(req.params.id)
+        const result = await collection.findOneAndDelete({ _id: id })
+        const user = result.value
 
-    const userId = req.body.id
+        if (user) res.send(user)
+        else res.sendStatus(404)
+    } catch (err) {
+        if (err instanceof Error) {
+            console.error(err.message)
+            res.sendStatus(500)
+        }
+    }
+})
+
+app.put("/api/users", jsonParser, async (req, res) => {
+    if (!req.body) return res.sendStatus(400)
     const userName = req.body.name
     const userAge = req.body.age
 
-    let data = fs.readFileSync(filePath, "utf8")
-    const users = JSON.parse(data)
+    const collection = req.app.locals.collection
+    try {
+        const id = new objectId(req.body.id)
+        const result = await collection.findOneAndUpdate({ _id: id }, {
+            $set: {
+                age: userAge,
+                name: userName
+            }
+        }, { returnDocument: "after" })
 
-    let user = users.find(el => el.id.toString() === userId)
-
-    if (user) {
-        user.age = userAge
-        user.name = userName
-        data = JSON.stringify(users)
-        fs.writeFileSync("users.json", data)
-        res.send(user)
+        const user = result.value
+        if (user) res.send(user)
+        else res.sendStatus(404)
+    } catch (err) {
+        if (err instanceof Error) {
+            console.error(err.message)
+            res.sendStatus(500)
+        }
     }
-
-    res.status(404).send(user)
 })
 
-app.listen(3000, () => console.log("Server is ready to connection..."))
+
+process.on("SIGINT", async () => {
+    await mongoClient.close()
+    console.log("App has finished the work...")
+    process.exit()
+})
